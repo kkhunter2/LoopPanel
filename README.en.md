@@ -1,6 +1,6 @@
 # LoopPanel
 
-[简体中文](README.md) | **English** | [한국어](README.ko.md)
+[简体中文](README.zh-CN.md) | **English** | [한국어](README.md)
 
 ![LoopPanel icon](assets/looppanel-icon-256.png)
 
