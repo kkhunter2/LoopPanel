@@ -14,17 +14,29 @@ use crate::{
     process,
     protocol::{HEIGHT, WIDTH, frame_packet, rgba_to_uyvy},
     render::Renderer,
+    settings::{DisplaySettings, Layout},
     transport::Tm360,
 };
+
+fn renderer_for(config: &Config, layout: Layout) -> Result<Renderer> {
+    match layout {
+        Layout::Default => Renderer::new(&config.template, &config.font),
+        Layout::Simple => Renderer::simple(&config.font),
+    }
+}
 
 pub fn run_until(
     config_path: Option<&str>,
     stop: &AtomicBool,
+    settings: &DisplaySettings,
     on_started: impl FnOnce(),
 ) -> Result<()> {
     let (config, _) = Config::load(config_path)?;
     let background = Background::load(config.background.as_deref())?;
-    let mut renderer = Renderer::new(&config.template, &config.font)?;
+    let mut active_layout = settings.layout();
+    let mut active_unit = settings.temperature_unit();
+    let mut renderer = renderer_for(&config, active_layout)?;
+    renderer.set_temperature_unit(active_unit);
     let mut monitor = Monitor::new();
     monitor.prime();
     let mut snapshot = monitor.sample();
@@ -84,6 +96,26 @@ pub fn run_until(
             break;
         }
 
+        // 托盘菜单改动显示选项后会唤醒本线程：立即重画，不重新初始化设备。
+        let requested_layout = settings.layout();
+        let requested_unit = settings.temperature_unit();
+        let settings_changed = requested_layout != active_layout || requested_unit != active_unit;
+        if requested_layout != active_layout {
+            active_layout = requested_layout;
+            renderer = renderer_for(&config, active_layout)?;
+            audio_spectrum = if renderer.audio_enabled() {
+                OutputSpectrum::open().ok()
+            } else {
+                None
+            };
+            audio_bands = [0.0; BAND_COUNT];
+        }
+        if settings_changed {
+            active_unit = requested_unit;
+            renderer.set_temperature_unit(active_unit);
+            renderer.update(&config, &snapshot)?;
+        }
+
         let now = Instant::now();
         let repeat_due = now >= next_repeat;
         let content_due = animated && now >= next_content;
@@ -114,7 +146,7 @@ pub fn run_until(
                 }
             }
         }
-        let mut content_changed = audio_changed;
+        let mut content_changed = audio_changed || settings_changed;
         if content_due {
             frame_index = frame_index.wrapping_add(1);
             next_content = now + background.delay(frame_index, config.fps);
